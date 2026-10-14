@@ -50,6 +50,12 @@ dated snapshot (`claude-haiku-4-5-20251001`) takes its base id's price; a model 
 estimate, and Marvin shows the run as unpriced rather than free. A new model's price is a release of this
 package, not of Marvin. `suggested_models` is the same table.
 
+**Prompt caching.** Every call marks the system prompt and the tool list for Anthropic's prompt cache, so after the
+first call of a conversation (and within an agent's own tool loop) that prefix — the bulk of the prompt — is read at
+a tenth of the input rate. The write costs 1.25× once; a lone call with no tool use pays that premium on the prefix
+and nothing else. The usage reports what was read (`cached_prompt_tokens`) and written (`cache_write_tokens`), and
+every price here carries the two cache rates, so Marvin's estimate is what Anthropic bills.
+
 ## Develop
 
 ```sh

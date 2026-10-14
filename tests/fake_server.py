@@ -21,8 +21,10 @@ class FakeAnthropicServer(FakeTransport):
 
     # ── the kit's vocabulary ─────────────────────────────────────────────────
 
-    def reply_text(self, text: str, *, prompt_tokens: int = 11, completion_tokens: int = 7) -> None:
-        self.replies.append({"text": text, "usage": (prompt_tokens, completion_tokens)})
+    def reply_text(self, text: str, *, prompt_tokens: int = 11, completion_tokens: int = 7, cached: int = 0, written: int = 0) -> None:
+        """`prompt_tokens` is what Anthropic reports as input_tokens: the prompt *less* what its cache served
+        (`cached`) or stored (`written`), as the real API does."""
+        self.replies.append({"text": text, "usage": (prompt_tokens, completion_tokens), "cache": (cached, written)})
 
     def reply_tool_calls(self, calls: list[ToolCall], *, prompt_tokens: int = 11, completion_tokens: int = 7) -> None:
         self.replies.append({"tool_calls": list(calls), "usage": (prompt_tokens, completion_tokens)})
@@ -76,6 +78,7 @@ def _message(reply: dict, body: dict) -> dict:
     """The reply as a Messages API response. A forced tool call (structured output) is answered the way
     the real API answers it: with a ``tool_use`` block whose input is the JSON the script gave as text."""
     pt, ct = reply.get("usage", (0, 0))
+    cache = reply.get("cache", (0, 0))
     content: list[dict] = []
     text = reply.get("text")
     forced = body.get("tool_choice", {}).get("type") == "tool"
@@ -94,5 +97,5 @@ def _message(reply: dict, body: dict) -> dict:
         "content": content,
         "stop_reason": "tool_use" if used_tools else "end_turn",
         "stop_sequence": None,
-        "usage": {"input_tokens": pt, "output_tokens": ct},
+        "usage": {"input_tokens": pt, "output_tokens": ct, "cache_read_input_tokens": cache[0], "cache_creation_input_tokens": cache[1]},
     }

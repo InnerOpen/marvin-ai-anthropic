@@ -31,15 +31,40 @@ def _sampling(opts: CompletionOptions) -> dict:
     return {"temperature": opts.temperature} if opts.temperature is not None else {}
 
 
+CACHE_MARK = {"type": "ephemeral"}
+
+
 def _result(resp, **extra) -> CompletionResult:
+    # Anthropic's input_tokens leaves out what its prompt cache served or stored; Marvin's prompt_tokens is the
+    # whole prompt, with those two as its parts.
+    usage = resp.usage
+    cached = getattr(usage, "cache_read_input_tokens", None) or 0
+    written = getattr(usage, "cache_creation_input_tokens", None) or 0
+    prompt = usage.input_tokens + cached + written
     return CompletionResult(
         content=extra.pop("content", ""),
-        prompt_tokens=resp.usage.input_tokens,
-        completion_tokens=resp.usage.output_tokens,
-        total_tokens=resp.usage.input_tokens + resp.usage.output_tokens,
+        prompt_tokens=prompt,
+        completion_tokens=usage.output_tokens,
+        total_tokens=prompt + usage.output_tokens,
         model=resp.model,
+        cached_prompt_tokens=cached,
+        cache_write_tokens=written,
         **extra,
     )
+
+
+def _system_blocks(system: str) -> list[dict]:
+    """The system prompt as one cached block: the persona and the workspace preamble are the same on every call of a
+    conversation, so after the first they are read from the prompt cache at a tenth of the price."""
+    return [{"type": "text", "text": system, "cache_control": CACHE_MARK}]
+
+
+def _tool_blocks(tools: list[ToolDefinition]) -> list[dict]:
+    """The tool definitions, the last one marked so the whole list (the bulk of an agent's prompt) is cached."""
+    out = [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools]
+    if out:
+        out[-1] = {**out[-1], "cache_control": CACHE_MARK}
+    return out
 
 
 class AnthropicProvider(AIProvider):
@@ -132,7 +157,7 @@ class AnthropicProvider(AIProvider):
         system, chat = self._split_messages(messages)
         kwargs = {"model": model, "messages": chat, "max_tokens": opts.max_tokens or DEFAULT_MAX_TOKENS, **_sampling(opts)}
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = _system_blocks(system)
         resp = self._client().messages.create(**kwargs)
         return _result(resp, content=resp.content[0].text if resp.content else "", raw=resp.model_dump())
 
@@ -151,11 +176,11 @@ class AnthropicProvider(AIProvider):
             "messages": chat,
             "max_tokens": opts.max_tokens or DEFAULT_MAX_TOKENS,
             **_sampling(opts),
-            "tools": [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools],
+            "tools": _tool_blocks(tools),
             "tool_choice": TOOL_CHOICES.get(tool_choice, {"type": "auto"}),
         }
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = _system_blocks(system)
         resp = self._client().messages.create(**kwargs)
 
         text_parts: list[str] = []
@@ -181,7 +206,7 @@ class AnthropicProvider(AIProvider):
             "tool_choice": {"type": "tool", "name": STRUCTURED_TOOL},
         }
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = _system_blocks(system)
         return self._client().messages.create(**kwargs)
 
     def complete_structured(self, messages: list[Message], model: str, output_schema: dict, options: CompletionOptions | None = None) -> dict:

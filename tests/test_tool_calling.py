@@ -121,7 +121,8 @@ def test_system_text_and_options_reach_the_request():
     client = _with_client(provider, _response([SimpleNamespace(type="text", text="ok")]))
     provider.complete([Message("system", "Be brief."), Message("user", "hi")], "claude-sonnet-5", CompletionOptions(max_tokens=50, temperature=0.2))
     sent = client.messages.create.call_args.kwargs
-    assert sent["system"] == "Be brief." and sent["max_tokens"] == 50 and sent["temperature"] == 0.2
+    assert sent["system"] == [{"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral"}}]
+    assert sent["max_tokens"] == 50 and sent["temperature"] == 0.2
     assert sent["messages"] == [{"role": "user", "content": "hi"}]
 
 
@@ -162,3 +163,20 @@ def test_the_client_is_built_from_the_constructor():
     client = AnthropicProvider(api_key="k", base_url="http://proxy.invalid", max_retries=0)._client()
     assert client.api_key == "k" and str(client.base_url).startswith("http://proxy.invalid") and client.max_retries == 0
     assert AnthropicProvider.from_credentials({"api_key": "k"})._max_retries == 2
+
+
+def test_the_system_and_the_tools_are_marked_for_the_prompt_cache():
+    """The persona and the tool list are the same on every call of a conversation: one cache mark on the system
+    block and one on the last tool caches that whole prefix."""
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[], stop_reason="end_turn", model="claude-sonnet-5", usage=SimpleNamespace(input_tokens=5, output_tokens=1), model_dump=dict
+    )
+    provider = AnthropicProvider(api_key="x")
+    provider._client = lambda: client
+    two = [*TOOLS, ToolDefinition(name="list_assets", description="List assets", input_schema={"type": "object"})]
+    provider.complete_with_tools([Message("system", "Be brief."), Message("user", "hi")], "claude-sonnet-5", two)
+
+    sent = client.messages.create.call_args.kwargs
+    assert sent["system"] == [{"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral"}}]
+    assert sent["tools"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in sent["tools"][0]

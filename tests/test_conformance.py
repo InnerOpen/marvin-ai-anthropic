@@ -38,3 +38,12 @@ def test_the_entry_point_declares_the_plugin():
 
     eps = {ep.name: ep.load() for ep in entry_points(group="marvin.ai_providers")}
     assert eps["anthropic"] is plugin
+
+
+def test_cache_reads_and_writes_are_parts_of_the_prompt():
+    """Anthropic's input_tokens leaves the cached and written parts out; Marvin's prompt_tokens is the whole prompt."""
+    transport = FakeAnthropicServer()
+    transport.reply_text("ok", prompt_tokens=100, completion_tokens=3, cached=25000, written=2000)
+    provider = AnthropicProvider(api_key=PLACEHOLDER_KEY, http_client=transport.client(), max_retries=0)
+    result = provider.complete([Message("user", "hi")], "claude-sonnet-5")
+    assert (result.prompt_tokens, result.cached_prompt_tokens, result.cache_write_tokens, result.total_tokens) == (27100, 25000, 2000, 27103)

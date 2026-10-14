@@ -1,12 +1,12 @@
 [project]
 name = "marvin-ai-anthropic"
-version = "0.1.0"
+version = "0.2.0"
 description = "Anthropic for Marvin: Claude through the Messages API, as an AI provider plugin."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # 0.8: the AI provider contract (AIProvider, AIProviderPlugin, Credential, ModelPrice) and its conformance kit.
-    "marvin-integration-sdk>=0.8,<1",
+    "marvin-integration-sdk>=0.10,<1",
     # 0.40: the Messages API with tool use, `base_url` / `http_client` / `max_retries` on the client and `models.list`.
     "anthropic>=0.40,<1",
 ]
@@ -32,7 +32,7 @@ packages = ["src/marvin_ai_anthropic"]
 # Dev only: the SDK commit Marvin core pins (pyproject.toml there), so tests run against the contract the
 # image ships. Released installs take the SDK from plugins.packages / the index.
 [tool.uv.sources]
-marvin-integration-sdk = { git = "https://github.com/InnerOpen/marvin-integration-sdk", rev = "39c49208defe5feaa1a9c59a7aa9b0d9fd2c0a60" }
+marvin-integration-sdk = { git = "https://github.com/InnerOpen/marvin-integration-sdk", rev = "42b67323ba0070f19260e637c2ef9d198b02d94f" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
