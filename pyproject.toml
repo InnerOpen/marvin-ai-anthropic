@@ -1,6 +1,6 @@
 [project]
 name = "marvin-ai-anthropic"
-version = "0.3.0"
+version = "0.3.1"
 description = "Anthropic for Marvin: Claude through the Messages API, as an AI provider plugin."
 readme = "README.md"
 requires-python = ">=3.11"

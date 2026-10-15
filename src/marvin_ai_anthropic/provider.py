@@ -74,13 +74,18 @@ def _result(resp, **extra) -> CompletionResult:
     )
 
 
+def _text(resp) -> str:
+    """The answer's text: its text blocks joined. A model may put a thinking block first (claude-sonnet-5-5 does)."""
+    return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+
+
 def _parsed(resp) -> dict:
     """A structured answer: the tool call's input, else JSON in the text (a model asked rather than forced to call
     the tool may answer in text, possibly fenced as a code block)."""
     for block in resp.content:
         if getattr(block, "type", None) == "tool_use":
             return dict(block.input or {})
-    text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+    text = _text(resp).strip()
     start, end = text.find("{"), text.rfind("}")
     return json.loads(text[start : end + 1]) if start != -1 and end > start else json.loads(text or "{}")
 
@@ -191,7 +196,7 @@ class AnthropicProvider(AIProvider):
         if system:
             kwargs["system"] = _system_blocks(system)
         resp = self._client().messages.create(**kwargs)
-        return _result(resp, content=resp.content[0].text if resp.content else "", raw=resp.model_dump())
+        return _result(resp, content=_text(resp), raw=resp.model_dump())
 
     def complete_with_tools(
         self,

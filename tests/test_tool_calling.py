@@ -249,3 +249,11 @@ def test_a_structured_answer_in_fenced_text_is_read():
     provider = AnthropicProvider(api_key="x")
     _with_client(provider, _response([SimpleNamespace(type="text", text='Here it is:\n```json\n{"a": 1}\n```')]))
     assert provider.complete_structured([Message("user", "x")], "claude-sonnet-5", {"type": "object"}) == {"a": 1}
+
+
+def test_a_thinking_block_before_the_text_is_skipped():
+    provider = AnthropicProvider(api_key="x")
+    _with_client(
+        provider, _response([SimpleNamespace(type="thinking", thinking="hmm", signature="s"), SimpleNamespace(type="text", text="A ship at sunset.")])
+    )
+    assert provider.complete([Message("user", "Describe it.")], "claude-sonnet-5-5").content == "A ship at sunset."
