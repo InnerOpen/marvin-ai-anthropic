@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -24,6 +25,26 @@ STRUCTURED_TOOL = "structured_output"
 # The cheapest current model: test_connection spends one token on it.
 CONNECTION_TEST_MODEL = "claude-haiku-4-5-20251001"
 TOOL_CHOICES = {"auto": {"type": "auto"}, "required": {"type": "any"}, "none": {"type": "none"}}
+FORCED_CHOICES = ("any", "tool")
+
+logger = logging.getLogger(__name__)
+
+# Models that answered a forced tool choice (`any`, or one named `tool`) with 400 "not supported for this model"
+# (claude-sonnet-5-5 does). They get `auto` plus an instruction to call the tool, without trying the forced call first.
+_UNFORCED_MODELS: set[str] = set()
+
+
+def _refuses_forced_choice(error: Exception) -> bool:
+    import anthropic
+
+    message = f"{error} {getattr(error, 'body', '')}"  # the API's message is in both, depending on the SDK version
+    return isinstance(error, anthropic.BadRequestError) and "tool_choice" in message and "not supported" in message
+
+
+def _unforced(kwargs: dict, instruction: str) -> dict:
+    """The same request with tool_choice auto and the instruction appended to the system prompt (its own block, so
+    the cached one stays as it was)."""
+    return {**kwargs, "tool_choice": {"type": "auto"}, "system": [*kwargs.get("system", []), {"type": "text", "text": instruction}]}
 
 
 def _sampling(opts: CompletionOptions) -> dict:
@@ -51,6 +72,17 @@ def _result(resp, **extra) -> CompletionResult:
         cache_write_tokens=written,
         **extra,
     )
+
+
+def _parsed(resp) -> dict:
+    """A structured answer: the tool call's input, else JSON in the text (a model asked rather than forced to call
+    the tool may answer in text, possibly fenced as a code block)."""
+    for block in resp.content:
+        if getattr(block, "type", None) == "tool_use":
+            return dict(block.input or {})
+    text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+    start, end = text.find("{"), text.rfind("}")
+    return json.loads(text[start : end + 1]) if start != -1 and end > start else json.loads(text or "{}")
 
 
 def _system_blocks(system: str) -> list[dict]:
@@ -181,7 +213,7 @@ class AnthropicProvider(AIProvider):
         }
         if system:
             kwargs["system"] = _system_blocks(system)
-        resp = self._client().messages.create(**kwargs)
+        resp = self._create(kwargs, "Answer by calling one of the tools.")
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -207,22 +239,31 @@ class AnthropicProvider(AIProvider):
         }
         if system:
             kwargs["system"] = _system_blocks(system)
-        return self._client().messages.create(**kwargs)
+        return self._create(kwargs, f"Answer by calling the {STRUCTURED_TOOL} tool with your answer as its input.")
+
+    def _create(self, kwargs: dict, instruction: str):
+        """messages.create. A forced tool choice that the model refuses is sent again as `auto` with `instruction`,
+        and the model is remembered, so its later calls go straight to that."""
+        client = self._client()
+        if kwargs.get("tool_choice", {}).get("type") not in FORCED_CHOICES:
+            return client.messages.create(**kwargs)
+        model = kwargs["model"]
+        if model not in _UNFORCED_MODELS:
+            try:
+                return client.messages.create(**kwargs)
+            except Exception as e:
+                if not _refuses_forced_choice(e):
+                    raise
+                _UNFORCED_MODELS.add(model)
+                logger.warning("%s refuses a forced tool choice; asking it to call the tool instead", model)
+        return client.messages.create(**_unforced(kwargs, instruction))
 
     def complete_structured(self, messages: list[Message], model: str, output_schema: dict, options: CompletionOptions | None = None) -> dict:
-        resp = self._structured_response(messages, model, output_schema, options)
-        for block in resp.content:
-            if hasattr(block, "input"):
-                return block.input
-        return json.loads(resp.content[0].text if resp.content else "{}")
+        return _parsed(self._structured_response(messages, model, output_schema, options))
 
     def execute_operation(self, messages, model, output_schema, options=None):
         resp = self._structured_response(messages, model, output_schema, options)
-        parsed = {}
-        for block in resp.content:
-            if hasattr(block, "input"):
-                parsed = block.input
-                break
+        parsed = _parsed(resp)
         return parsed, _result(resp, content=str(parsed))
 
     def list_models(self) -> list[str]:

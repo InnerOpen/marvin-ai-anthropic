@@ -180,3 +180,72 @@ def test_the_system_and_the_tools_are_marked_for_the_prompt_cache():
     sent = client.messages.create.call_args.kwargs
     assert sent["system"] == [{"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral"}}]
     assert sent["tools"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in sent["tools"][0]
+
+
+def _refusal():
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    body = {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": 'tool_choice: type "tool" and "any" are not supported for this model.'},
+    }
+    return anthropic.BadRequestError("Error code: 400", response=httpx.Response(400, request=request, json=body), body=body)
+
+
+def test_a_model_that_refuses_a_forced_tool_is_asked_to_call_it_instead(monkeypatch):
+    from marvin_ai_anthropic import provider as mod
+
+    monkeypatch.setattr(mod, "_UNFORCED_MODELS", set())
+    provider = AnthropicProvider(api_key="x")
+    client = _with_client(provider, None)
+    answer = _response([SimpleNamespace(type="tool_use", id="t", name="structured_output", input={"tags": ["a"]})])
+    client.messages.create.side_effect = [_refusal(), answer, answer]
+
+    assert provider.complete_structured([Message("system", "Tag."), Message("user", "x")], "claude-sonnet-5-5", {"type": "object"}) == {"tags": ["a"]}
+    forced, unforced = (c.kwargs for c in client.messages.create.call_args_list)
+    assert forced["tool_choice"] == {"type": "tool", "name": "structured_output"}
+    assert unforced["tool_choice"] == {"type": "auto"}
+    assert unforced["system"][0] == forced["system"][0]  # the cached block is untouched
+    assert "structured_output" in unforced["system"][-1]["text"]
+
+    # Remembered: the next call goes straight to auto.
+    provider.complete_structured([Message("user", "y")], "claude-sonnet-5-5", {"type": "object"})
+    assert client.messages.create.call_count == 3 and client.messages.create.call_args.kwargs["tool_choice"] == {"type": "auto"}
+
+
+def test_a_required_tool_call_falls_back_the_same_way(monkeypatch):
+    from marvin_ai_anthropic import provider as mod
+
+    monkeypatch.setattr(mod, "_UNFORCED_MODELS", set())
+    provider = AnthropicProvider(api_key="x")
+    client = _with_client(provider, None)
+    call = _response([SimpleNamespace(type="tool_use", id="tu", name="get_entry", input={})], stop_reason="tool_use")
+    client.messages.create.side_effect = [_refusal(), call]
+
+    result = provider.complete_with_tools([Message("user", "hi")], "claude-sonnet-5-5", TOOLS, tool_choice="required")
+    assert [c.name for c in result.tool_calls] == ["get_entry"]
+    assert client.messages.create.call_args.kwargs["tool_choice"] == {"type": "auto"}
+
+
+def test_other_bad_requests_are_not_retried(monkeypatch):
+    import anthropic
+    import httpx
+
+    from marvin_ai_anthropic import provider as mod
+
+    monkeypatch.setattr(mod, "_UNFORCED_MODELS", set())
+    provider = AnthropicProvider(api_key="x")
+    client = _with_client(provider, None)
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    client.messages.create.side_effect = anthropic.BadRequestError("bad", response=httpx.Response(400, request=request), body=None)
+    with pytest.raises(anthropic.BadRequestError):
+        provider.complete_structured([Message("user", "x")], "claude-sonnet-5-5", {"type": "object"})
+    assert client.messages.create.call_count == 1 and mod._UNFORCED_MODELS == set()
+
+
+def test_a_structured_answer_in_fenced_text_is_read():
+    provider = AnthropicProvider(api_key="x")
+    _with_client(provider, _response([SimpleNamespace(type="text", text='Here it is:\n```json\n{"a": 1}\n```')]))
+    assert provider.complete_structured([Message("user", "x")], "claude-sonnet-5", {"type": "object"}) == {"a": 1}
