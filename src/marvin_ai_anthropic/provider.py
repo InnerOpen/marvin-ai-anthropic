@@ -106,6 +106,7 @@ def _tool_blocks(tools: list[ToolDefinition]) -> list[dict]:
 
 class AnthropicProvider(AIProvider):
     provider_type = "anthropic"
+    logo = "logo.svg"  # the Claude mark: Marvin shows it beside the provider's name
     display_name = "Anthropic"
     supports_vision = True
     supports_structured_output = True
